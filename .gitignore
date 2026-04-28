@@ -41,7 +41,3 @@ data/large/
 # OS
 .DS_Store
 Thumbs.db
-
-# Generated figures (regenerate from scripts)
-figures/*.pdf
-!figures/.gitkeep
