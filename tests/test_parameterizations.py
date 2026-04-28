@@ -9,6 +9,7 @@ from option_pricing.parameterizations import (
     TreeParameters,
     crr_parameters,
     leisen_reimer_parameters,
+    tian_closed_form_parameters,
     tian_parameters,
 )
 from option_pricing.peizer_pratt import peizer_pratt_inversion
@@ -83,6 +84,20 @@ class TestTianParameters:
         params = tian_parameters(S=100, K=100, T=1, N=100, r=0.05, sigma=0.20)
         R = np.exp(0.05 * params.dt)
         assert params.d < R < params.u
+
+    def test_strict_strike_alignment(self):
+        """Strict Tian should have one terminal node exactly equal to K."""
+        S, K, N = 100, 110, 100
+        params = tian_parameters(
+            S=S, K=K, T=1, N=N, r=0.05, sigma=0.20
+        )
+        # Find a* (the strike-aligned index) and verify u^a* * d^(N-a*) * S = K
+        # We use the same convention as the implementation (a* = round(N*p_CRR))
+        crr = crr_parameters(T=1, N=N, r=0.05, sigma=0.20)
+        a_star = max(1, min(N - 1, int(round(N * crr.p))))
+        terminal_at_a_star = (params.u ** a_star) * (params.d ** (N - a_star)) * S
+        # Should match K to high precision (the alignment is by construction)
+        assert terminal_at_a_star == pytest.approx(K, rel=1e-9)
 
     def test_falls_back_to_crr_at_extreme(self):
         """For very small N where Tian might fail, falls back to CRR."""

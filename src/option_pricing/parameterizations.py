@@ -42,6 +42,7 @@ __all__ = [
     "TreeParameters",
     "crr_parameters",
     "tian_parameters",
+    "tian_closed_form_parameters",
     "leisen_reimer_parameters",
 ]
 
@@ -114,7 +115,7 @@ def crr_parameters(
     return TreeParameters(u=u, d=d, p=p, dt=dt)
 
 
-def tian_parameters(
+def tian_closed_form_parameters(
     S: float,
     K: float,
     T: float,
@@ -123,11 +124,14 @@ def tian_parameters(
     sigma: float,
     q: float = 0.0,
 ) -> TreeParameters:
-    """Compute Tian (1999) tree parameters with strike alignment.
+    """Compute closed-form Tian-style tree parameters via mean/variance match.
 
-    Tian's flexible parameterization chooses u, d such that one terminal
-    node coincides exactly with the strike K, eliminating the integer-
-    rounding error that produces oscillation in the standard CRR scheme.
+    This is the simplified Tian-style parameterization that matches the
+    mean and variance of the log-return per period without enforcing
+    strict strike alignment. Convenient when no specific strike is given
+    or when robustness across many strikes is desired.
+    
+    For strict strike-aligned Tian (1999), use ``tian_parameters``.
 
     The construction proceeds as follows. Let a* be the integer nearest
     to N * p_CRR, where p_CRR is the standard CRR risk-neutral probability.
@@ -211,6 +215,138 @@ def tian_parameters(
     # Sanity check: if we fall outside (0, 1), fall back to CRR.
     if not 0 < p < 1 or u <= d:
         return crr
+
+    return TreeParameters(u=u, d=d, p=p, dt=dt)
+
+
+def tian_parameters(
+    S: float,
+    K: float,
+    T: float,
+    N: int,
+    r: float,
+    sigma: float,
+    q: float = 0.0,
+) -> TreeParameters:
+    """Compute strict strike-aligned Tian (1999) tree parameters.
+
+    Tian's flexible parameterization chooses (u, d, p) such that:
+
+        1. One terminal node coincides exactly with the strike K:
+           u^{a*} * d^{N - a*} * S = K
+        2. Risk-neutral pricing: p*u + (1-p)*d = exp((r-q)*dt)
+        3. Variance matching: p*(1-p)*(log u - log d)^2 = sigma^2 * dt
+
+    where a* is the integer nearest to N * p_CRR (the standard CRR
+    risk-neutral probability), centering the tree near the strike.
+
+    The construction eliminates the integer-cutoff oscillation
+    characteristic of the CRR scheme by guaranteeing strike-node
+    alignment at every N. The resulting convergence is O(1/N) without
+    oscillation.
+
+    Args:
+        S: Current spot price. Must be positive.
+        K: Strike price. Must be positive.
+        T: Time to expiration in years. Must be positive.
+        N: Number of time steps. Must be positive.
+        r: Continuously compounded riskless rate.
+        sigma: Volatility of the underlying. Must be positive.
+        q: Continuous dividend yield. Defaults to 0.
+
+    Returns:
+        TreeParameters dataclass with u, d, p, dt.
+
+    Raises:
+        ValueError: If inputs are invalid.
+
+    Notes:
+        For inputs near the no-arbitrage boundary or extreme parameter
+        ranges, the strict strike-alignment system may fail to admit
+        a valid solution. In these cases we fall back to the
+        closed-form Tian parameterization.
+    """
+    if S <= 0:
+        raise ValueError(f"Spot S must be positive, got {S}")
+    if K <= 0:
+        raise ValueError(f"Strike K must be positive, got {K}")
+    if T <= 0:
+        raise ValueError(f"Time T must be positive, got {T}")
+    if N <= 0:
+        raise ValueError(f"Number of steps N must be positive, got {N}")
+    if sigma <= 0:
+        raise ValueError(f"Volatility sigma must be positive, got {sigma}")
+
+    from scipy.optimize import brentq
+
+    dt = T / N
+
+    # Get CRR baseline to determine a*
+    crr = crr_parameters(T=T, N=N, r=r, sigma=sigma, q=q)
+    a_star = int(round(N * crr.p))
+    a_star = max(1, min(N - 1, a_star))  # ensure 1 <= a* <= N-1
+
+    # Set up the system. With x = log(u), the strike condition gives
+    # y = log(d) = (L - a* * x) / (N - a*), where L = log(K/S).
+    L = np.log(K / S)
+    M = np.exp((r - q) * dt)  # forward growth factor per period
+    target_var = sigma**2 * dt
+
+    def y_of_x(x: float) -> float:
+        return (L - a_star * x) / (N - a_star)
+
+    def p_of_xy(x: float, y: float) -> float:
+        # Risk-neutral pricing: p*exp(x) + (1-p)*exp(y) = M
+        # Solving for p: p = (M - exp(y)) / (exp(x) - exp(y))
+        ex, ey = np.exp(x), np.exp(y)
+        denom = ex - ey
+        if abs(denom) < 1e-14:
+            return np.nan
+        return (M - ey) / denom
+
+    def variance_residual(x: float) -> float:
+        """Returns variance(x) - target_var; we seek the root."""
+        y = y_of_x(x)
+        if x <= y:
+            # Need u > d, i.e., x > y. If violated, return a strong negative.
+            return -target_var
+        p = p_of_xy(x, y)
+        if not (0 < p < 1) or np.isnan(p):
+            # Invalid p; signal "too far" from the solution.
+            # Returning a large positive pushes the solver away.
+            return target_var
+        return p * (1 - p) * (x - y) ** 2 - target_var
+
+    # Bracket for x. Reference is x_CRR = sigma * sqrt(dt).
+    x_crr = sigma * np.sqrt(dt)
+    x_lo, x_hi = 0.1 * x_crr, 5.0 * x_crr
+
+    # Verify the bracket actually brackets a root
+    f_lo = variance_residual(x_lo)
+    f_hi = variance_residual(x_hi)
+
+    if f_lo * f_hi >= 0:
+        # No sign change in the bracket; fall back to closed-form Tian.
+        return tian_closed_form_parameters(
+            S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q
+        )
+
+    try:
+        x_solution = brentq(variance_residual, x_lo, x_hi, xtol=1e-12)
+    except (ValueError, RuntimeError):
+        return tian_closed_form_parameters(
+            S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q
+        )
+
+    y_solution = y_of_x(x_solution)
+    u = np.exp(x_solution)
+    d = np.exp(y_solution)
+    p = p_of_xy(x_solution, y_solution)
+
+    if not (0 < p < 1) or u <= d:
+        return tian_closed_form_parameters(
+            S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q
+        )
 
     return TreeParameters(u=u, d=d, p=p, dt=dt)
 
