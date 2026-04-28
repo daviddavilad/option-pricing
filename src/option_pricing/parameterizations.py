@@ -272,6 +272,13 @@ def leisen_reimer_parameters(
     p = peizer_pratt_inversion(d2, N_eff)
     p_prime = peizer_pratt_inversion(d1, N_eff)
 
+    # Guard against numerical edge cases where p saturates to 0 or 1
+    # for very small sigma. In such cases LR's parameterization breaks down;
+    # fall back to CRR which handles low-volatility cases more robustly.
+    eps = 1e-9
+    if p < eps or p > 1 - eps:
+        return crr_parameters(T=T, N=N_eff, r=r, sigma=sigma, q=q)
+
     M = np.exp((r - q) * dt)
     u = M * p_prime / p
     d = M * (1 - p_prime) / (1 - p)
