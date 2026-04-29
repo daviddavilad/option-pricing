@@ -96,3 +96,14 @@ correct attribution, Tian (1993).
 Tian (1999) Tables I and II, 6 strike-alignment tests at machine
 precision, and 4 Richardson extrapolation tests including the worked
 example from the paper.
+
+### Added — 2026-04-29 (continued)
+
+- `scripts/generate_american_convergence.py` and the resulting
+  `figures/american_convergence.pdf`. Convergence comparison for
+  American put pricing across CRR, Tian (1999), and Leisen--Reimer.
+  Reference price computed by LR at $N = 25{,}001$, verified stable
+  via Richardson extrapolation. All three schemes exhibit
+  $O(1/N)$ rate for American options at this regime; LR retains a
+  constant-factor advantage but loses its $O(1/N^2)$ European rate
+  advantage. Used in Section 7.6 of the LaTeX note.
