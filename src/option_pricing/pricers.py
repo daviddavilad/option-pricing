@@ -34,6 +34,7 @@ __all__ = [
     "binomial_price",
     "binomial_price_closed_form",
     "american_exercise_boundary",
+    "richardson_extrapolation",
 ]
 
 OptionType = Literal["call", "put"]
@@ -346,3 +347,47 @@ def american_exercise_boundary(
         V = np.maximum(continuation, exercise)
 
     return boundary
+
+def richardson_extrapolation(
+    price_N: float,
+    price_2N: float,
+    rho: float = 2.0,
+) -> float:
+    """Richardson-extrapolate two binomial prices to a higher-order estimate.
+
+    Given prices ``C(N)`` and ``C(2N)`` from a tree scheme whose pricing
+    error e(N) = C(N) - C_true satisfies a known limit of the error
+    ratio rho = e(N) / e(2N), the Richardson-extrapolated estimate
+
+        C_hat(2N) = (rho * C(2N) - C(N)) / (rho - 1)
+
+    has lower-order error than either input. This is Tian (1999),
+    eq. (17). For schemes with smooth (monotone) convergence at rate
+    O(1/N), the error ratio rho -> 2; this is the default.
+
+    The technique only improves accuracy when convergence is smooth.
+    For oscillatory schemes (such as standard CRR for vanilla
+    options), the error ratio fluctuates and extrapolation can amplify
+    rather than reduce error.
+
+    Args:
+        price_N: Price computed with N time steps.
+        price_2N: Price computed with 2N time steps.
+        rho: Limit of the error ratio. Default 2.0, appropriate for
+            O(1/N) schemes including the strike-aligned Tian (1999)
+            flexible binomial.
+
+    Returns:
+        The Richardson-extrapolated price estimate.
+
+    Raises:
+        ValueError: If rho == 1 (the formula is singular).
+
+    References:
+        Tian, Y. (1999). A Flexible Binomial Option Pricing Model.
+        Journal of Futures Markets, 19(7), 817-843. See eqs. (16),
+        (17), (18).
+    """
+    if rho == 1.0:
+        raise ValueError("Richardson extrapolation requires rho != 1")
+    return (rho * price_2N - price_N) / (rho - 1.0)

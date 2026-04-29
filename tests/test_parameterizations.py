@@ -8,9 +8,10 @@ import pytest
 from option_pricing.parameterizations import (
     TreeParameters,
     crr_parameters,
+    flexible_binomial_parameters,
     leisen_reimer_parameters,
-    tian_closed_form_parameters,
-    tian_parameters,
+    tian_1993_parameters,
+    tian_1999_parameters,
 )
 from option_pricing.peizer_pratt import peizer_pratt_inversion
 
@@ -71,41 +72,257 @@ class TestCRRParameters:
         assert with_div.p < no_div.p
 
 
-class TestTianParameters:
-    """Tests for Tian (1999) parameterization."""
+class TestTian1993Parameters:
+    """Tests for the Tian (1993) moment-matching parameterization."""
 
     def test_returns_valid_tree(self):
-        """Tian parameters should yield a valid tree."""
-        params = tian_parameters(S=100, K=100, T=1, N=100, r=0.05, sigma=0.20)
-        # All conditions enforced by TreeParameters dataclass
+        params = tian_1993_parameters(T=1, N=100, r=0.05, sigma=0.20)
         assert isinstance(params, TreeParameters)
 
     def test_no_arbitrage_holds(self):
-        params = tian_parameters(S=100, K=100, T=1, N=100, r=0.05, sigma=0.20)
+        params = tian_1993_parameters(T=1, N=100, r=0.05, sigma=0.20)
         R = np.exp(0.05 * params.dt)
         assert params.d < R < params.u
 
-    def test_strict_strike_alignment(self):
-        """Strict Tian should have one terminal node exactly equal to K."""
-        S, K, N = 100, 110, 100
-        params = tian_parameters(
-            S=S, K=K, T=1, N=N, r=0.05, sigma=0.20
-        )
-        # Find a* (the strike-aligned index) and verify u^a* * d^(N-a*) * S = K
-        # We use the same convention as the implementation (a* = round(N*p_CRR))
-        crr = crr_parameters(T=1, N=N, r=0.05, sigma=0.20)
-        a_star = max(1, min(N - 1, int(round(N * crr.p))))
-        terminal_at_a_star = (params.u ** a_star) * (params.d ** (N - a_star)) * S
-        # Should match K to high precision (the alignment is by construction)
-        assert terminal_at_a_star == pytest.approx(K, rel=1e-9)
+    def test_does_not_depend_on_strike(self):
+        """The Tian (1993) parameterization should not depend on K.
 
-    def test_falls_back_to_crr_at_extreme(self):
-        """For very small N where Tian might fail, falls back to CRR."""
-        # Both should produce valid trees
-        tian = tian_parameters(S=100, K=100, T=1, N=2, r=0.05, sigma=0.20)
-        crr = crr_parameters(T=1, N=2, r=0.05, sigma=0.20)
-        assert isinstance(tian, TreeParameters)
-        assert isinstance(crr, TreeParameters)
+        ``tian_1993_parameters`` does not even take a strike argument.
+        This test pins down that intent: scheme parameters are
+        determined entirely by (T, N, r, sigma, q).
+        """
+        import inspect
+        sig = inspect.signature(tian_1993_parameters)
+        assert "K" not in sig.parameters
+        assert "S" not in sig.parameters
+
+    def test_first_moment_matches(self):
+        """Tian (1993) matches the first moment: p*u + (1-p)*d = exp((r-q)*dt)."""
+        T, N, r, sigma, q = 1.0, 100, 0.05, 0.20, 0.02
+        params = tian_1993_parameters(T=T, N=N, r=r, sigma=sigma, q=q)
+        forward = params.p * params.u + (1 - params.p) * params.d
+        expected = np.exp((r - q) * params.dt)
+        assert forward == pytest.approx(expected, abs=1e-12)
+
+    def test_second_moment_matches(self):
+        """Tian (1993) matches the second moment of S(t+dt)/S(t).
+
+        Under the lognormal target, E[(S(t+dt)/S(t))^2] = exp((2(r-q) + sigma^2) * dt).
+        The binomial second moment is p*u^2 + (1-p)*d^2.
+        """
+        T, N, r, sigma = 1.0, 100, 0.05, 0.20
+        params = tian_1993_parameters(T=T, N=N, r=r, sigma=sigma)
+        binom_m2 = params.p * params.u**2 + (1 - params.p) * params.d**2
+        expected_m2 = np.exp((2 * r + sigma**2) * params.dt)
+        assert binom_m2 == pytest.approx(expected_m2, abs=1e-12)
+
+    def test_negative_sigma_raises(self):
+        with pytest.raises(ValueError, match="sigma must be positive"):
+            tian_1993_parameters(T=1, N=100, r=0.05, sigma=-0.1)
+
+
+class TestFlexibleBinomial:
+    """Tests for the Tian (1999) flexible binomial parameterization."""
+
+    def test_lambda_zero_recovers_crr(self):
+        """At lambda = 0 the flexible binomial coincides with CRR."""
+        T, N, r, sigma = 1.0, 100, 0.05, 0.20
+        fb = flexible_binomial_parameters(T=T, N=N, r=r, sigma=sigma, lam=0.0)
+        crr = crr_parameters(T=T, N=N, r=r, sigma=sigma)
+        assert fb.u == pytest.approx(crr.u, abs=1e-14)
+        assert fb.d == pytest.approx(crr.d, abs=1e-14)
+        assert fb.p == pytest.approx(crr.p, abs=1e-14)
+        assert fb.dt == pytest.approx(crr.dt, abs=1e-14)
+
+    def test_positive_lambda_tilts_up(self):
+        """Positive lambda shifts the tree upward (u*d > 1)."""
+        T, N, r, sigma = 1.0, 100, 0.05, 0.20
+        fb = flexible_binomial_parameters(T=T, N=N, r=r, sigma=sigma, lam=1.0)
+        assert fb.u * fb.d > 1.0
+
+    def test_negative_lambda_tilts_down(self):
+        """Negative lambda shifts the tree downward (u*d < 1)."""
+        T, N, r, sigma = 1.0, 100, 0.05, 0.20
+        fb = flexible_binomial_parameters(T=T, N=N, r=r, sigma=sigma, lam=-1.0)
+        assert fb.u * fb.d < 1.0
+
+    def test_no_arbitrage_holds_for_moderate_lambda(self):
+        """For bounded lambda and reasonable N, no-arbitrage holds."""
+        T, N, r, sigma = 1.0, 100, 0.05, 0.20
+        for lam in [-2.0, -1.0, 0.0, 1.0, 2.0]:
+            params = flexible_binomial_parameters(
+                T=T, N=N, r=r, sigma=sigma, lam=lam,
+            )
+            R = np.exp(r * params.dt)
+            assert params.d < R < params.u, f"failed at lam={lam}"
+
+    def test_dividend_yield_supported(self):
+        """Dividend yield enters via p but not u, d."""
+        T, N, r, sigma, lam = 1.0, 100, 0.05, 0.20, 0.5
+        fb_no_q = flexible_binomial_parameters(
+            T=T, N=N, r=r, sigma=sigma, lam=lam, q=0.0,
+        )
+        fb_with_q = flexible_binomial_parameters(
+            T=T, N=N, r=r, sigma=sigma, lam=lam, q=0.03,
+        )
+        # u and d depend only on sigma, lam, dt -- not on r or q
+        assert fb_no_q.u == pytest.approx(fb_with_q.u, abs=1e-14)
+        assert fb_no_q.d == pytest.approx(fb_with_q.d, abs=1e-14)
+        # p does change
+        assert fb_no_q.p != fb_with_q.p
+
+
+class TestTian1999Parameters:
+    """Tests for the strike-aligned Tian (1999) parameterization."""
+
+    def test_returns_valid_tree(self):
+        params = tian_1999_parameters(
+            S=100, K=100, T=1, N=100, r=0.05, sigma=0.20,
+        )
+        assert isinstance(params, TreeParameters)
+
+    def test_atm_strike_aligned_node_equals_strike(self):
+        """At ATM, the strike-aligned terminal node equals K exactly."""
+        S, K, T, N, r, sigma = 100.0, 100.0, 1.0, 100, 0.05, 0.20
+        params = tian_1999_parameters(S=S, K=K, T=T, N=N, r=r, sigma=sigma)
+        # Reconstruct j_0 the same way the function does.
+        sqrt_dt = np.sqrt(params.dt)
+        u_0 = np.exp(sigma * sqrt_dt)
+        d_0 = np.exp(-sigma * sqrt_dt)
+        eta = (np.log(K / S) - N * np.log(d_0)) / np.log(u_0 / d_0)
+        j_0 = int(round(eta))
+        terminal = S * (params.u ** j_0) * (params.d ** (N - j_0))
+        assert terminal == pytest.approx(K, abs=1e-9)
+
+    @pytest.mark.parametrize("K,N", [
+        (90.0, 50), (95.0, 100), (105.0, 200), (110.0, 500),
+        (120.0, 100), (80.0, 250),
+    ])
+    def test_strike_aligned_node_equals_strike_otm_itm(self, K, N):
+        """For OTM/ITM strikes, alignment holds at machine precision."""
+        S, T, r, sigma = 100.0, 1.0, 0.05, 0.20
+        params = tian_1999_parameters(S=S, K=K, T=T, N=N, r=r, sigma=sigma)
+        sqrt_dt = np.sqrt(params.dt)
+        u_0 = np.exp(sigma * sqrt_dt)
+        d_0 = np.exp(-sigma * sqrt_dt)
+        eta = (np.log(K / S) - N * np.log(d_0)) / np.log(u_0 / d_0)
+        j_0 = int(round(eta))
+        terminal = S * (params.u ** j_0) * (params.d ** (N - j_0))
+        assert abs(terminal - K) < 1e-9
+
+    def test_no_arbitrage_holds_typical_inputs(self):
+        S, K, T, N, r, sigma = 100.0, 100.0, 1.0, 100, 0.05, 0.20
+        params = tian_1999_parameters(S=S, K=K, T=T, N=N, r=r, sigma=sigma)
+        R = np.exp(r * params.dt)
+        assert params.d < R < params.u
+
+    def test_atm_with_zero_log_ratio_recovers_crr_at_even_N(self):
+        """For S = K and N even, j_0 = N/2 and lambda = 0 (CRR).
+
+        The strike-alignment formula gives
+            lambda = (log(K/S) - (2 j_0 - N) sigma sqrt(dt)) / (N sigma^2 dt).
+        At K = S, log(K/S) = 0. For even N, eta = N/2 exactly, so
+        j_0 = N/2 and (2 j_0 - N) = 0, giving lambda = 0.
+        """
+        S, K, T, sigma = 100.0, 100.0, 1.0, 0.20
+        N = 100  # even, so j_0 = 50
+        tian = tian_1999_parameters(S=S, K=K, T=T, N=N, r=0.05, sigma=sigma)
+        crr = crr_parameters(T=T, N=N, r=0.05, sigma=sigma)
+        assert tian.u == pytest.approx(crr.u, abs=1e-14)
+        assert tian.d == pytest.approx(crr.d, abs=1e-14)
+        assert tian.p == pytest.approx(crr.p, abs=1e-14)
+
+
+class TestTian1999PaperReproduction:
+    """Reproduce numerical results from Tian (1999), JFM 19(7), 817-843.
+
+    These tests pin the implementation against the paper's published
+    tables. They use the same setup the paper uses: S = K = 100,
+    sigma = 0.2, T = 0.5, r = 0.06.
+    """
+
+    def _european_call(self, params, S, K, T, r, N):
+        from option_pricing.pricers import binomial_price
+        return binomial_price(
+            S=S, K=K, T=T, r=r, N=N, params=params,
+            option_type="call", exercise_style="european",
+        )
+
+    @pytest.mark.parametrize("N,price_expected", [
+        (50,   7.1829),
+        (100,  7.1648),
+        (150,  7.1553),
+        (200,  7.1491),
+        (400,  7.1591),
+        (800,  7.1542),
+        (5000, 7.1556),
+    ])
+    def test_table_I_lambda_positive_one(self, N, price_expected):
+        """Tian (1999) Table I, lambda = +1 column."""
+        S, K, T, r, sigma = 100.0, 100.0, 0.5, 0.06, 0.20
+        params = flexible_binomial_parameters(
+            T=T, N=N, r=r, sigma=sigma, lam=1.0,
+        )
+        price = self._european_call(params, S, K, T, r, N)
+        # Paper reports prices to 4 decimals
+        assert price == pytest.approx(price_expected, abs=5e-5)
+
+    @pytest.mark.parametrize("N,price_expected", [
+        (50,   7.1276),
+        (100,  7.1417),
+        (150,  7.1464),
+        (200,  7.1488),
+        (400,  7.1524),
+        (800,  7.1541),
+        (5000, 7.1556),
+    ])
+    def test_table_I_lambda_zero(self, N, price_expected):
+        """Tian (1999) Table I, lambda = 0 column (CRR baseline)."""
+        S, K, T, r, sigma = 100.0, 100.0, 0.5, 0.06, 0.20
+        params = flexible_binomial_parameters(
+            T=T, N=N, r=r, sigma=sigma, lam=0.0,
+        )
+        price = self._european_call(params, S, K, T, r, N)
+        assert price == pytest.approx(price_expected, abs=5e-5)
+
+    @pytest.mark.parametrize("N,price_expected", [
+        (50,   7.1785),
+        (100,  7.1624),
+        (150,  7.1537),
+        (200,  7.1480),
+        (400,  7.1585),
+        (800,  7.1539),
+        (5000, 7.1556),
+    ])
+    def test_table_I_lambda_negative_one(self, N, price_expected):
+        """Tian (1999) Table I, lambda = -1 column."""
+        S, K, T, r, sigma = 100.0, 100.0, 0.5, 0.06, 0.20
+        params = flexible_binomial_parameters(
+            T=T, N=N, r=r, sigma=sigma, lam=-1.0,
+        )
+        price = self._european_call(params, S, K, T, r, N)
+        assert price == pytest.approx(price_expected, abs=5e-5)
+
+    @pytest.mark.parametrize("N,price_expected", [
+        (25,   10.139765),
+        (50,   10.165893),
+        (100,  10.178175),
+        (200,  10.184097),
+        (400,  10.187085),
+        (800,  10.188570),
+        (1600, 10.189314),
+        (3200, 10.189686),
+        (6400, 10.189873),
+    ])
+    def test_table_II_strike_aligned_K95(self, N, price_expected):
+        """Tian (1999) Table II top, strike-aligned FB with K = 95."""
+        S, K, T, r, sigma = 100.0, 95.0, 0.5, 0.06, 0.20
+        params = tian_1999_parameters(
+            S=S, K=K, T=T, N=N, r=r, sigma=sigma,
+        )
+        price = self._european_call(params, S, K, T, r, N)
+        # Paper reports to 6 decimals
+        assert price == pytest.approx(price_expected, abs=5e-7)
 
 
 class TestLeisenReimerParameters:

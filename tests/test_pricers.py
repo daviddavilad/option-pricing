@@ -9,7 +9,8 @@ from option_pricing.black_scholes import black_scholes_call, black_scholes_put
 from option_pricing.parameterizations import (
     crr_parameters,
     leisen_reimer_parameters,
-    tian_parameters,
+    tian_1993_parameters,
+    tian_1999_parameters,
 )
 from option_pricing.pricers import (
     binomial_price,
@@ -160,7 +161,8 @@ class TestSchemeConsistency:
         "scheme",
         [
             ("crr", crr_parameters),
-            ("tian", tian_parameters),
+            ("tian_1993", tian_1993_parameters),
+            ("tian_1999", tian_1999_parameters),
             ("lr", leisen_reimer_parameters),
         ],
     )
@@ -168,7 +170,7 @@ class TestSchemeConsistency:
         """At high N, all schemes should produce nearly identical prices."""
         scheme_name, scheme_fn = scheme
         N = 1001
-        if scheme_name == "crr":
+        if scheme_name in ("crr", "tian_1993"):
             params = scheme_fn(T=T, N=N, r=r, sigma=sigma)
         else:
             params = scheme_fn(S=S, K=K, T=T, N=N, r=r, sigma=sigma)
@@ -178,3 +180,65 @@ class TestSchemeConsistency:
         )
         # All schemes should be within 0.05 of Black-Scholes at N=1001
         assert abs(price - BS_CALL) < 0.05
+
+class TestRichardsonExtrapolation:
+    """Tests for the Richardson extrapolation utility (Tian 1999, eq. 17)."""
+
+    def test_zero_error_passes_through(self):
+        """If both inputs equal the true price, output equals true price."""
+        from option_pricing.pricers import richardson_extrapolation
+        true_price = 7.1559
+        result = richardson_extrapolation(price_N=true_price, price_2N=true_price)
+        assert result == pytest.approx(true_price, abs=1e-12)
+
+    def test_default_rho_is_two(self):
+        """Default rho=2 implements 2*C(2N) - C(N), the standard form."""
+        from option_pricing.pricers import richardson_extrapolation
+        # With rho = 2: extrapolated = 2*price_2N - price_N
+        result = richardson_extrapolation(price_N=1.0, price_2N=2.0)
+        assert result == pytest.approx(3.0, abs=1e-12)
+
+    def test_rho_one_raises(self):
+        """rho = 1 is singular and must raise."""
+        from option_pricing.pricers import richardson_extrapolation
+        with pytest.raises(ValueError, match="rho != 1"):
+            richardson_extrapolation(price_N=1.0, price_2N=2.0, rho=1.0)
+
+    def test_tian_paper_extrapolation_example(self):
+        """Reproduce the worked example from Tian (1999), p. 829.
+
+        Tian states: with FB error -0.011883 at N=100, error ratio
+        2.033633, the extrapolation reduces the error to -0.000400.
+
+        We compute the extrapolated price from FB prices at N=50 and
+        N=100, then check that |extrap - BS| matches Tian's stated
+        |error| of 0.000400 (4 decimals).
+        """
+        from option_pricing.black_scholes import black_scholes_call
+        from option_pricing.parameterizations import tian_1999_parameters
+        from option_pricing.pricers import (
+            binomial_price,
+            richardson_extrapolation,
+        )
+
+        S, K, T, r, sigma = 100.0, 95.0, 0.5, 0.06, 0.20
+        bs = black_scholes_call(S=S, K=K, T=T, r=r, sigma=sigma)
+
+        params_50 = tian_1999_parameters(S=S, K=K, T=T, N=50, r=r, sigma=sigma)
+        params_100 = tian_1999_parameters(S=S, K=K, T=T, N=100, r=r, sigma=sigma)
+        price_50 = binomial_price(
+            S=S, K=K, T=T, r=r, N=50, params=params_50,
+            option_type="call", exercise_style="european",
+        )
+        price_100 = binomial_price(
+            S=S, K=K, T=T, r=r, N=100, params=params_100,
+            option_type="call", exercise_style="european",
+        )
+
+        extrap = richardson_extrapolation(
+            price_N=price_50, price_2N=price_100, rho=2.0,
+        )
+        # Tian's worked figure: extrap error ~ -0.000400
+        assert abs(extrap - bs) < 5e-4
+        # And the extrapolation actually beats the un-extrapolated N=100
+        assert abs(extrap - bs) < abs(price_100 - bs)

@@ -25,7 +25,8 @@ from option_pricing.black_scholes import black_scholes_call, black_scholes_put
 from option_pricing.parameterizations import (
     crr_parameters,
     leisen_reimer_parameters,
-    tian_parameters,
+    tian_1993_parameters,
+    tian_1999_parameters,
 )
 from option_pricing.pricers import binomial_price
 
@@ -35,7 +36,7 @@ __all__ = [
 ]
 
 OptionType = Literal["call", "put"]
-SchemeName = Literal["crr", "tian", "lr"]
+SchemeName = Literal["crr", "tian_1993", "tian_1999", "lr"]
 
 
 def _implied_volatility_brent(
@@ -175,7 +176,8 @@ def implied_volatility_binomial(
         T: Time to expiration in years.
         r: Continuously compounded riskless rate.
         N: Number of binomial steps.
-        scheme: Tree parameterization, one of "crr", "tian", "lr".
+        scheme: Tree parameterization, one of "crr", "tian_1993",
+            "tian_1999", or "lr".
         option_type: "call" or "put".
         exercise_style: "european" or "american".
         q: Continuous dividend yield.
@@ -200,15 +202,20 @@ def implied_volatility_binomial(
     def _build_params(sigma: float):
         if scheme == "crr":
             return crr_parameters(T=T, N=N, r=r, sigma=sigma, q=q)
-        elif scheme == "tian":
-            return tian_parameters(S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q)
+        elif scheme == "tian_1993":
+            return tian_1993_parameters(T=T, N=N, r=r, sigma=sigma, q=q)
+        elif scheme == "tian_1999":
+            return tian_1999_parameters(
+                S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q
+            )
         elif scheme == "lr":
             return leisen_reimer_parameters(
                 S=S, K=K, T=T, N=N, r=r, sigma=sigma, q=q
             )
         else:
             raise ValueError(
-                f"scheme must be 'crr', 'tian', or 'lr', got {scheme!r}"
+                "scheme must be 'crr', 'tian_1993', 'tian_1999', or 'lr', "
+                f"got {scheme!r}"
             )
 
     def pricer(sigma: float) -> float:
