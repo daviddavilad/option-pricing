@@ -126,6 +126,8 @@ All three schemes share the same O(N²) backward-induction inner loop; per-call 
 The mathematical content of the accompanying note is the author's own; complete handwritten derivations for the key results — one-period replication, the closed-form CRR formula, CRR parameter asymptotics, the mean and variance of Z_N, the Lindeberg–Feller verification, binomial tail convergence, stock-numeraire convergence, and the oscillation mechanism — are available in [`notes/CRR_Handwritten_Derivations.pdf`](notes/CRR_Handwritten_Derivations.pdf). AI-assisted tools were used for prose polish, LaTeX typesetting, and figure-script structure; numerical results, code architecture, and mathematical reasoning are the author's.
 
 ## Project structure
+
+```
 option-pricing/
 ├── src/option_pricing/   # core library
 ├── scripts/              # figure and table generation
@@ -134,6 +136,7 @@ option-pricing/
 ├── notes/                # handwritten derivations
 ├── figures/              # generated PDFs and PNGs
 └── CHANGELOG.md
+```
 
 ## Planned extensions
 
