@@ -141,10 +141,14 @@ def main() -> None:
     # Title is intentionally omitted; LaTeX caption provides description
     plt.tight_layout()
 
-    output_path = Path(__file__).parent.parent / "figures" / "convergence_crr_vs_lr.pdf"
+    output_path = (
+        Path(__file__).parent.parent / "figures"
+        / "convergence_crr_vs_lr.pdf"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-    print(f"Saved {output_path}")
+    plt.savefig(output_path.with_suffix(".png"), dpi=150)
+    print(f"Saved {output_path} (+ .png)")
     plt.close()
 
 

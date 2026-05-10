@@ -190,9 +190,9 @@ def main() -> None:
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path)
-    print(f"Saved {output_path}")
+    plt.savefig(output_path.with_suffix(".png"), dpi=150)
+    print(f"Saved {output_path} (+ .png)")
     plt.close()
-
 
 if __name__ == "__main__":
     main()
