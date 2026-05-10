@@ -41,3 +41,5 @@ data/large/
 # OS
 .DS_Store
 Thumbs.db
+
+.Rhistory
