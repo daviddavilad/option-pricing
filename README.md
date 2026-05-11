@@ -96,6 +96,7 @@ uv run scripts/generate_tian_smoothness.py            # Figure 1
 uv run scripts/generate_tian_extrapolation.py         # Figure 2
 uv run scripts/generate_american_convergence.py       # Figure 5
 uv run scripts/benchmark_runtimes.py                  # Table 2
+uv run scripts/generate_social_preview.py             # GitHub social preview
 ```
 
 All scripts are deterministic; output is byte-identical across runs.
